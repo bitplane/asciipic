@@ -3,7 +3,7 @@ from pathlib import Path
 from PIL import Image
 
 from asciipic.model import FontModel
-from asciipic.sampling import sample_vector
+from asciipic.sampling import sample_grid
 
 
 def image_to_ascii(
@@ -27,16 +27,8 @@ def image_to_ascii(
     cols = image.width // cw
     rows = image.height // ch
 
-    lines = []
-    for row in range(rows):
-        chars = []
-        for col in range(cols):
-            x0 = col * cw
-            y0 = row * ch
-            cell = image.crop((x0, y0, x0 + cw, y0 + ch))
-            raw = sample_vector(cell, cw, ch)
-            normalized = tuple(v / 255.0 for v in raw)
-            chars.append(model.find_nearest(normalized))
-        lines.append("".join(chars))
+    if rows == 0 or cols == 0:
+        return ""
 
-    return "\n".join(lines)
+    grid = sample_grid(image, cw, ch) / 255.0
+    return "\n".join(model.find_nearest_grid(grid))

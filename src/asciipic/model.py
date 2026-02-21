@@ -3,6 +3,8 @@ import struct
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import numpy as np
+
 MAGIC = b"APIC"
 FORMAT_VERSION = 1
 
@@ -68,3 +70,21 @@ class FontModel:
                 best_dist = dist
                 best_char = char
         return best_char
+
+    def _build_lookup_arrays(self) -> tuple[list[str], np.ndarray]:
+        """Build parallel char list and vector matrix for vectorized lookup."""
+        chars = list(self.characters.keys())
+        matrix = np.array([self.characters[c] for c in chars])
+        return chars, matrix
+
+    def find_nearest_grid(self, grid: np.ndarray) -> list[str]:
+        """Map an (rows, cols, 6) array of vectors to lines of characters."""
+        chars, matrix = self._build_lookup_arrays()
+        rows, cols, _ = grid.shape
+        flat = grid.reshape(-1, 6)
+        # ||a - b||^2 = ||a||^2 + ||b||^2 - 2*a.b — avoids (N, M, 6) intermediate
+        flat_sq = np.sum(flat**2, axis=1, keepdims=True)  # (N, 1)
+        mat_sq = np.sum(matrix**2, axis=1)  # (M,)
+        dists = flat_sq + mat_sq - 2.0 * flat @ matrix.T  # (N, M)
+        indices = np.argmin(dists, axis=1).reshape(rows, cols)
+        return ["".join(chars[i] for i in row) for row in indices]
