@@ -1,7 +1,7 @@
 from PIL import Image, ImageDraw, ImageFont
 
 from asciipic.model import FontModel
-from asciipic.sampling import sample_vector
+from asciipic.sampling import NUM_SAMPLES, sample_vector
 
 
 def generate_model(
@@ -25,7 +25,7 @@ def generate_model(
         raw_vectors[char] = list(sample_vector(img, cell_width, cell_height))
 
     # Normalize each dimension to 0–1
-    maxes = [0.0] * 6
+    maxes = [0.0] * NUM_SAMPLES
     for vector in raw_vectors.values():
         for i, v in enumerate(vector):
             maxes[i] = max(maxes[i], v)

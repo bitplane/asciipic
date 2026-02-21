@@ -1,15 +1,25 @@
 import numpy as np
 from PIL import Image
 
-# Circle centers as fractions of (cell_width, cell_height)
+# Circle centers as fractions of (cell_width, cell_height) — 3x5 grid
 SAMPLE_POSITIONS = [
-    (0.25, 0.167),  # UL
-    (0.75, 0.167),  # UR
-    (0.25, 0.5),  # ML
-    (0.75, 0.5),  # MR
-    (0.25, 0.833),  # LL
-    (0.75, 0.833),  # LR
+    (0.167, 0.1),
+    (0.5, 0.1),
+    (0.833, 0.1),
+    (0.167, 0.3),
+    (0.5, 0.3),
+    (0.833, 0.3),
+    (0.167, 0.5),
+    (0.5, 0.5),
+    (0.833, 0.5),
+    (0.167, 0.7),
+    (0.5, 0.7),
+    (0.833, 0.7),
+    (0.167, 0.9),
+    (0.5, 0.9),
+    (0.833, 0.9),
 ]
+NUM_SAMPLES = len(SAMPLE_POSITIONS)
 
 
 def _build_circle_masks(cell_width: int, cell_height: int) -> list[np.ndarray]:
@@ -46,13 +56,13 @@ def sample_circle(image: Image.Image, cx: float, cy: float, radius: float) -> fl
 
 
 def sample_vector(image: Image.Image, cell_width: int, cell_height: int) -> tuple[float, ...]:
-    """Sample all 6 positions on a cell-sized image, returning raw brightness values."""
+    """Sample all positions on a cell-sized image, returning raw brightness values."""
     radius = min(cell_width, cell_height) * 0.25
     return tuple(sample_circle(image, cx * cell_width, cy * cell_height, radius) for cx, cy in SAMPLE_POSITIONS)
 
 
 def sample_grid(image: Image.Image, cell_width: int, cell_height: int) -> np.ndarray:
-    """Sample all cells in an image at once. Returns array of shape (rows, cols, 6)."""
+    """Sample all cells in an image at once. Returns array of shape (rows, cols, NUM_SAMPLES)."""
     arr = np.asarray(image, dtype=np.float64)
     masks = _build_circle_masks(cell_width, cell_height)
     rows = arr.shape[0] // cell_height

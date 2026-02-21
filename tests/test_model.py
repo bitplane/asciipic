@@ -3,6 +3,12 @@ import math
 import pytest
 
 from asciipic.model import FontModel
+from asciipic.sampling import NUM_SAMPLES
+
+
+def _vec(*values):
+    """Repeat last value to fill NUM_SAMPLES slots."""
+    return values + (values[-1],) * (NUM_SAMPLES - len(values))
 
 
 def make_model():
@@ -12,9 +18,9 @@ def make_model():
         cell_width=8,
         cell_height=16,
         characters={
-            " ": (0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
-            "#": (1.0, 1.0, 1.0, 1.0, 1.0, 1.0),
-            "L": (0.5, 0.0, 0.5, 0.0, 0.5, 0.5),
+            " ": (0.0,) * NUM_SAMPLES,
+            "#": (1.0,) * NUM_SAMPLES,
+            "L": _vec(0.5, 0.0, 0.5, 0.0, 0.5, 0.5),
         },
     )
 
@@ -37,17 +43,17 @@ def test_save_load_roundtrip(tmp_path):
 
 def test_find_nearest_exact():
     model = make_model()
-    assert model.find_nearest((0.0, 0.0, 0.0, 0.0, 0.0, 0.0)) == " "
-    assert model.find_nearest((1.0, 1.0, 1.0, 1.0, 1.0, 1.0)) == "#"
-    assert model.find_nearest((0.5, 0.0, 0.5, 0.0, 0.5, 0.5)) == "L"
+    assert model.find_nearest((0.0,) * NUM_SAMPLES) == " "
+    assert model.find_nearest((1.0,) * NUM_SAMPLES) == "#"
+    assert model.find_nearest(_vec(0.5, 0.0, 0.5, 0.0, 0.5, 0.5)) == "L"
 
 
 def test_find_nearest_approx():
     model = make_model()
     # Close to all-ones should give #
-    assert model.find_nearest((0.9, 0.9, 0.9, 0.9, 0.9, 0.9)) == "#"
+    assert model.find_nearest((0.9,) * NUM_SAMPLES) == "#"
     # Close to all-zeros should give space
-    assert model.find_nearest((0.1, 0.1, 0.1, 0.1, 0.1, 0.1)) == " "
+    assert model.find_nearest((0.1,) * NUM_SAMPLES) == " "
 
 
 def test_unicode_character_roundtrip(tmp_path):
@@ -56,7 +62,7 @@ def test_unicode_character_roundtrip(tmp_path):
         font_size=12,
         cell_width=8,
         cell_height=16,
-        characters={"\u2588": (1.0, 1.0, 1.0, 1.0, 1.0, 1.0)},
+        characters={"\u2588": (1.0,) * NUM_SAMPLES},
     )
     path = tmp_path / "unicode.apic"
     model.save(path)

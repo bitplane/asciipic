@@ -4,6 +4,7 @@ import pytest
 
 from asciipic.charsets import ASCII_PRINTABLE
 from asciipic.generator import generate_model
+from asciipic.sampling import NUM_SAMPLES
 
 
 def find_monospace_font():
@@ -37,7 +38,7 @@ def test_generate_model_produces_vectors():
     model = generate_model(FONT_PATH, "AB #")
     assert len(model.characters) == 4
     for vector in model.characters.values():
-        assert len(vector) == 6
+        assert len(vector) == NUM_SAMPLES
         assert all(0.0 <= v <= 1.0 for v in vector)
 
 
@@ -45,7 +46,7 @@ def test_generate_model_produces_vectors():
 def test_generate_model_normalization():
     model = generate_model(FONT_PATH, ASCII_PRINTABLE)
     # At least one dimension should have a 1.0 value (the max)
-    for dim in range(6):
+    for dim in range(NUM_SAMPLES):
         values = [v[dim] for v in model.characters.values()]
         assert max(values) == pytest.approx(1.0)
 
@@ -69,4 +70,4 @@ def test_dense_char_has_high_values():
     model = generate_model(FONT_PATH, " @")
     at_vec = model.characters["@"]
     # @ should be fairly filled in across all regions
-    assert sum(at_vec) / 6 > 0.3
+    assert sum(at_vec) / NUM_SAMPLES > 0.3

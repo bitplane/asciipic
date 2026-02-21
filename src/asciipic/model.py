@@ -5,8 +5,12 @@ from pathlib import Path
 
 import numpy as np
 
+from asciipic.sampling import NUM_SAMPLES
+
 MAGIC = b"APIC"
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
+_VECTOR_FMT = f">{NUM_SAMPLES}f"
+_VECTOR_BYTES = NUM_SAMPLES * 4
 
 
 @dataclass
@@ -31,7 +35,7 @@ class FontModel:
                 char_bytes = char.encode("utf-8")
                 f.write(struct.pack("B", len(char_bytes)))
                 f.write(char_bytes)
-                f.write(struct.pack(">6f", *vector))
+                f.write(struct.pack(_VECTOR_FMT, *vector))
 
     @classmethod
     def load(cls, path: str | Path) -> "FontModel":
@@ -51,7 +55,7 @@ class FontModel:
             for _ in range(char_count):
                 (char_len,) = struct.unpack("B", f.read(1))
                 char = f.read(char_len).decode("utf-8")
-                vector = struct.unpack(">6f", f.read(24))
+                vector = struct.unpack(_VECTOR_FMT, f.read(_VECTOR_BYTES))
                 characters[char] = vector
             return cls(
                 font_name=font_name,
@@ -78,11 +82,11 @@ class FontModel:
         return chars, matrix
 
     def find_nearest_grid(self, grid: np.ndarray) -> list[str]:
-        """Map an (rows, cols, 6) array of vectors to lines of characters."""
+        """Map an (rows, cols, NUM_SAMPLES) array of vectors to lines of characters."""
         chars, matrix = self._build_lookup_arrays()
-        rows, cols, _ = grid.shape
-        flat = grid.reshape(-1, 6)
-        # ||a - b||^2 = ||a||^2 + ||b||^2 - 2*a.b — avoids (N, M, 6) intermediate
+        rows, cols, dim = grid.shape
+        flat = grid.reshape(-1, dim)
+        # ||a - b||^2 = ||a||^2 + ||b||^2 - 2*a.b — avoids large intermediate
         flat_sq = np.sum(flat**2, axis=1, keepdims=True)  # (N, 1)
         mat_sq = np.sum(matrix**2, axis=1)  # (M,)
         dists = flat_sq + mat_sq - 2.0 * flat @ matrix.T  # (N, M)

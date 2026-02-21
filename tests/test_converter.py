@@ -2,14 +2,15 @@ from PIL import Image
 
 from asciipic.converter import image_to_ascii
 from asciipic.model import FontModel
+from asciipic.sampling import NUM_SAMPLES
 
 
 def make_model(cell_width=10, cell_height=20, characters=None):
     """Build a FontModel with known vectors for testing."""
     if characters is None:
         characters = {
-            " ": (0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
-            "#": (1.0, 1.0, 1.0, 1.0, 1.0, 1.0),
+            " ": (0.0,) * NUM_SAMPLES,
+            "#": (1.0,) * NUM_SAMPLES,
         }
     return FontModel(
         font_name="test",
