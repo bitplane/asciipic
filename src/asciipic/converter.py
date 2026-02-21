@@ -2,8 +2,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from asciipic.model import FontModel
-from asciipic.sampling import enhance_contrast, sample_colours, sample_grid
+from asciipic.engine import Engine
 
 
 def _format_colour(lines: list[str], colours) -> str:
@@ -22,17 +21,16 @@ def _format_colour(lines: list[str], colours) -> str:
 
 def image_to_ascii(
     image: Image.Image | str | Path,
-    model: FontModel,
+    engine: Engine,
     width: int | None = None,
-    exponent: float | None = None,
     colour: bool = False,
 ) -> str:
     if not isinstance(image, Image.Image):
         image = Image.open(image)
     image = image.convert("RGB")
 
-    cw = model.cell_width
-    ch = model.cell_height
+    cw = engine.cell_width
+    ch = engine.cell_height
 
     if width is not None:
         new_pixel_width = width * cw
@@ -48,13 +46,8 @@ def image_to_ascii(
     if rows == 0 or cols == 0:
         return ""
 
-    gray = image.convert("L")
-    grid = sample_grid(gray, cw, ch) / 255.0
-    if exponent is not None:
-        grid = enhance_contrast(grid, exponent)
-    lines = model.find_nearest_grid(grid)
+    result = engine.render(image)
 
     if colour:
-        colours = sample_colours(image, cw, ch)
-        return _format_colour(lines, colours)
-    return "\n".join(lines)
+        return _format_colour(result.chars, result.colours)
+    return "\n".join(result.chars)

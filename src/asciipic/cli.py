@@ -4,6 +4,7 @@ from pathlib import Path
 
 from asciipic.converter import image_to_ascii
 from asciipic.model import FontModel
+from asciipic.sampler import SamplerEngine
 from asciipic.terminal import get_terminal_size
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
@@ -37,4 +38,5 @@ def main():
         sys.exit(1)
 
     model = FontModel.load(MODELS[args.model])
-    print(image_to_ascii(image_path, model, width=width, exponent=args.exponent, colour=args.colour))
+    engine = SamplerEngine(model, exponent=args.exponent)
+    print(image_to_ascii(image_path, engine, width=width, colour=args.colour))
