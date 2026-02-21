@@ -22,7 +22,9 @@ def image_to_ascii(
     if width is not None:
         new_pixel_width = width * cw
         scale = new_pixel_width / image.width
-        new_pixel_height = int(image.height * scale)
+        # Terminal characters are taller than wide; compensate so output isn't stretched
+        aspect_correction = cw / ch
+        new_pixel_height = int(image.height * scale * aspect_correction)
         image = image.resize((new_pixel_width, new_pixel_height), Image.LANCZOS)
 
     cols = image.width // cw

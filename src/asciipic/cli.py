@@ -7,7 +7,7 @@ from asciipic.model import FontModel
 from asciipic.terminal import get_terminal_size
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-DEFAULT_MODEL = DATA_DIR / "ascii"
+MODELS = {p.name: p for p in DATA_DIR.iterdir() if p.is_file()}
 
 
 def main():
@@ -15,6 +15,9 @@ def main():
     parser.add_argument("image", help="Path to input image")
     parser.add_argument(
         "-s", "--size", type=int, default=None, help="Output width in columns (default: terminal width)"
+    )
+    parser.add_argument(
+        "-m", "--model", default="ascii", choices=sorted(MODELS), help="Character model to use (default: ascii)"
     )
     parser.add_argument(
         "-e",
@@ -32,5 +35,5 @@ def main():
         print(f"File not found: {image_path}", file=sys.stderr)
         sys.exit(1)
 
-    model = FontModel.load(DEFAULT_MODEL)
+    model = FontModel.load(MODELS[args.model])
     print(image_to_ascii(image_path, model, width=width, exponent=args.exponent))
