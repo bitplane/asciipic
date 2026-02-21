@@ -1,7 +1,9 @@
 import numpy as np
 import pytest
 
-from asciipic.sampling import NUM_SAMPLES, enhance_contrast
+from PIL import Image
+
+from asciipic.sampling import NUM_SAMPLES, enhance_contrast, sample_colours
 
 
 def test_enhance_contrast_uniform_grid_unchanged():
@@ -78,3 +80,28 @@ def test_enhance_contrast_vertical_boundary():
     interior = [4, 7, 10]
     for idx in interior:
         assert result[1, 0, idx] == pytest.approx(0.2)
+
+
+def test_sample_colours_solid_red():
+    img = Image.new("RGB", (20, 40), (255, 0, 0))
+    result = sample_colours(img, 10, 20)
+    assert result.shape == (2, 2, 2, 3)
+    # Both fg and bg should be red for every cell
+    for r in range(2):
+        for c in range(2):
+            np.testing.assert_array_equal(result[r, c, 0], [255, 0, 0])
+            np.testing.assert_array_equal(result[r, c, 1], [255, 0, 0])
+
+
+def test_sample_colours_bright_dark_split():
+    img = Image.new("RGB", (10, 20), (0, 0, 0))
+    pixels = img.load()
+    # Top half bright white, bottom half black
+    for y in range(10):
+        for x in range(10):
+            pixels[x, y] = (255, 255, 255)
+    result = sample_colours(img, 10, 20)
+    assert result.shape == (1, 1, 2, 3)
+    # bg (dark) should be black, fg (bright) should be white
+    np.testing.assert_array_equal(result[0, 0, 0, :], [0, 0, 0])
+    np.testing.assert_array_equal(result[0, 0, 1, :], [255, 255, 255])

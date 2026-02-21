@@ -111,3 +111,19 @@ def test_contrast_enhancement_preserves_gradient():
             pixels[x, y] = 255
     result = image_to_ascii(img, model, exponent=2.0)
     assert result == " #"
+
+
+def test_colour_output_contains_ansi_escapes():
+    model = make_model()
+    img = Image.new("RGB", (20, 20), (255, 0, 0))
+    result = image_to_ascii(img, model, colour=True)
+    assert "\033[38;2;" in result
+    assert "\033[48;2;" in result
+    assert "\033[0m" in result
+
+
+def test_colour_false_has_no_escapes():
+    model = make_model()
+    img = Image.new("RGB", (20, 20), (255, 0, 0))
+    result = image_to_ascii(img, model, colour=False)
+    assert "\033" not in result

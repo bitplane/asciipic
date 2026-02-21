@@ -26,6 +26,7 @@ def main():
         default=10.0,
         help="Contrast enhancement exponent (default: 10.0). Higher values increase contrast at cell boundaries.",
     )
+    parser.add_argument("-c", "--colour", action="store_true", default=False, help="Enable truecolor ANSI output")
     args = parser.parse_args()
 
     width = args.size if args.size is not None else get_terminal_size()[0]
@@ -36,4 +37,4 @@ def main():
         sys.exit(1)
 
     model = FontModel.load(MODELS[args.model])
-    print(image_to_ascii(image_path, model, width=width, exponent=args.exponent))
+    print(image_to_ascii(image_path, model, width=width, exponent=args.exponent, colour=args.colour))

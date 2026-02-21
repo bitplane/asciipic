@@ -124,3 +124,46 @@ def enhance_contrast(grid: np.ndarray, exponent: float) -> np.ndarray:
     max_val = np.maximum(grid, external_max)
     safe_max = np.where(max_val > 0, max_val, 1.0)
     return (grid / safe_max) ** exponent * max_val
+
+
+def sample_colours(image: Image.Image, cell_width: int, cell_height: int) -> np.ndarray:
+    """Compute per-cell foreground and background colours from an RGB image.
+
+    Splits each cell's pixels by brightness threshold (mean), averages the
+    bright pixels to get foreground and dark pixels to get background.
+
+    Returns array of shape (rows, cols, 2, 3) as uint8 where [:,:,0,:] is bg
+    and [:,:,1,:] is fg.
+    """
+    arr = np.asarray(image, dtype=np.float64)
+    rows = arr.shape[0] // cell_height
+    cols = arr.shape[1] // cell_width
+
+    trimmed = arr[: rows * cell_height, : cols * cell_width]
+    # (rows, cols, cell_h, cell_w, 3)
+    cells = trimmed.reshape(rows, cell_height, cols, cell_width, 3).transpose(0, 2, 1, 3, 4)
+
+    # Per-cell mean brightness from RGB
+    brightness = cells.mean(axis=4)  # (rows, cols, cell_h, cell_w)
+    threshold = brightness.mean(axis=(2, 3), keepdims=True)  # (rows, cols, 1, 1)
+    bright_mask = brightness > threshold  # (rows, cols, cell_h, cell_w)
+    dark_mask = ~bright_mask
+
+    result = np.zeros((rows, cols, 2, 3), dtype=np.uint8)
+    for ch in range(3):
+        channel = cells[:, :, :, :, ch]  # (rows, cols, cell_h, cell_w)
+
+        bright_sum = (channel * bright_mask).sum(axis=(2, 3))
+        bright_count = bright_mask.sum(axis=(2, 3))
+        dark_sum = (channel * dark_mask).sum(axis=(2, 3))
+        dark_count = dark_mask.sum(axis=(2, 3))
+
+        # Average, falling back to overall mean when one group is empty
+        cell_mean = channel.mean(axis=(2, 3))
+        fg = np.where(bright_count > 0, bright_sum / np.maximum(bright_count, 1), cell_mean)
+        bg = np.where(dark_count > 0, dark_sum / np.maximum(dark_count, 1), cell_mean)
+
+        result[:, :, 0, ch] = np.clip(bg, 0, 255).astype(np.uint8)
+        result[:, :, 1, ch] = np.clip(fg, 0, 255).astype(np.uint8)
+
+    return result
