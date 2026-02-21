@@ -97,3 +97,17 @@ def test_image_smaller_than_one_cell():
     img = Image.new("L", (5, 10), 128)
     result = image_to_ascii(img, model)
     assert result == ""
+
+
+def test_contrast_enhancement_preserves_gradient():
+    model = make_model()
+    cw, ch = 10, 20
+    img = Image.new("L", (cw * 2, ch))
+    pixels = img.load()
+    for y in range(ch):
+        for x in range(cw):
+            pixels[x, y] = 0
+        for x in range(cw, cw * 2):
+            pixels[x, y] = 255
+    result = image_to_ascii(img, model, exponent=2.0)
+    assert result == " #"

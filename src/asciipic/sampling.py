@@ -19,7 +19,19 @@ SAMPLE_POSITIONS = [
     (0.5, 0.9),
     (0.833, 0.9),
 ]
+SAMPLE_COLS = 3
+SAMPLE_ROWS = 5
 NUM_SAMPLES = len(SAMPLE_POSITIONS)
+
+# For each neighbor direction: (axis, shift_direction, affected_indices, mirror_indices)
+# affected_indices are the border sample positions influenced by this neighbor,
+# mirror_indices are the corresponding positions in the neighbor cell.
+_NEIGHBOR_MAPS = [
+    (1, -1, [0, 3, 6, 9, 12], [2, 5, 8, 11, 14]),  # left neighbor
+    (1, 1, [2, 5, 8, 11, 14], [0, 3, 6, 9, 12]),  # right neighbor
+    (0, -1, [0, 1, 2], [12, 13, 14]),  # above neighbor
+    (0, 1, [12, 13, 14], [0, 1, 2]),  # below neighbor
+]
 
 
 def _build_circle_masks(cell_width: int, cell_height: int) -> list[np.ndarray]:
@@ -80,3 +92,35 @@ def sample_grid(image: Image.Image, cell_width: int, cell_height: int) -> np.nda
         result[:, :, i] = masked.sum(axis=(2, 3)) / mask.sum()
 
     return result
+
+
+def enhance_contrast(grid: np.ndarray, exponent: float) -> np.ndarray:
+    """Apply directional contrast enhancement using neighboring cells.
+
+    For border sample positions, compares with the mirror position in the
+    adjacent cell and applies a power curve to increase local contrast.
+    """
+    rows, cols, _ = grid.shape
+    external_max = np.zeros_like(grid)
+
+    for axis, direction, affected, mirrors in _NEIGHBOR_MAPS:
+        pad_widths = [(0, 0)] * 3
+        if direction == -1:
+            pad_widths[axis] = (1, 0)
+        else:
+            pad_widths[axis] = (0, 1)
+        padded = np.pad(grid, pad_widths, constant_values=0.0)
+
+        slices = [slice(None)] * 3
+        if direction == -1:
+            slices[axis] = slice(0, padded.shape[axis] - 1)
+        else:
+            slices[axis] = slice(1, padded.shape[axis])
+        neighbor = padded[tuple(slices)]
+
+        for a_idx, m_idx in zip(affected, mirrors):
+            np.maximum(external_max[:, :, a_idx], neighbor[:, :, m_idx], out=external_max[:, :, a_idx])
+
+    max_val = np.maximum(grid, external_max)
+    safe_max = np.where(max_val > 0, max_val, 1.0)
+    return (grid / safe_max) ** exponent * max_val

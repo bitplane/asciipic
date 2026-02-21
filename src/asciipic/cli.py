@@ -16,6 +16,13 @@ def main():
     parser.add_argument(
         "-s", "--size", type=int, default=None, help="Output width in columns (default: terminal width)"
     )
+    parser.add_argument(
+        "-e",
+        "--exponent",
+        type=float,
+        default=10.0,
+        help="Contrast enhancement exponent (default: 10.0). Higher values increase contrast at cell boundaries.",
+    )
     args = parser.parse_args()
 
     width = args.size if args.size is not None else get_terminal_size()[0]
@@ -26,4 +33,4 @@ def main():
         sys.exit(1)
 
     model = FontModel.load(DEFAULT_MODEL)
-    print(image_to_ascii(image_path, model, width=width))
+    print(image_to_ascii(image_path, model, width=width, exponent=args.exponent))

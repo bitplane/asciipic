@@ -3,13 +3,14 @@ from pathlib import Path
 from PIL import Image
 
 from asciipic.model import FontModel
-from asciipic.sampling import sample_grid
+from asciipic.sampling import enhance_contrast, sample_grid
 
 
 def image_to_ascii(
     image: Image.Image | str | Path,
     model: FontModel,
     width: int | None = None,
+    exponent: float | None = None,
 ) -> str:
     if not isinstance(image, Image.Image):
         image = Image.open(image)
@@ -31,4 +32,6 @@ def image_to_ascii(
         return ""
 
     grid = sample_grid(image, cw, ch) / 255.0
+    if exponent is not None:
+        grid = enhance_contrast(grid, exponent)
     return "\n".join(model.find_nearest_grid(grid))
