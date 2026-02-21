@@ -4,7 +4,7 @@ from asciipic.model import FontModel
 from asciipic.sampling import NUM_SAMPLES, sample_vector
 
 
-def generate_model(
+def generate_font_model(
     font_path: str,
     characters: str,
     font_size: int = 16,

@@ -8,7 +8,8 @@ from asciipic.sampler import SamplerEngine
 from asciipic.terminal import get_terminal_size
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-MODELS = {p.name: p for p in DATA_DIR.iterdir() if p.is_file()}
+SAMPLER_DIR = DATA_DIR / "sampler"
+MODELS = {p.name: p for p in SAMPLER_DIR.iterdir() if p.is_file()}
 
 
 def main():
