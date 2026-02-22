@@ -1,36 +1,11 @@
-import shutil
-
 import pytest
 
 from asciipic.charsets import ASCII_PRINTABLE
 from asciipic.generator import generate_font_model
 from asciipic.sampling import NUM_SAMPLES
 
-
-def find_monospace_font():
-    """Find a monospace font on the system."""
-    candidates = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
-        "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
-        "/usr/share/fonts/dejavu-sans-mono-fonts/DejaVuSansMono.ttf",
-    ]
-    for path in candidates:
-        if shutil.os.path.exists(path):
-            return path
-    # Try fc-match as fallback
-    result = shutil.which("fc-match")
-    if result:
-        import subprocess
-
-        out = subprocess.run(["fc-match", "-f", "%{file}", "monospace"], capture_output=True, text=True)
-        if out.returncode == 0 and out.stdout.strip():
-            return out.stdout.strip()
-    return None
-
-
-FONT_PATH = find_monospace_font()
-needs_font = pytest.mark.skipif(FONT_PATH is None, reason="No monospace font found on system")
+# FONT_PATH and needs_font are defined in conftest.py and loaded by pytest
+from tests.conftest import FONT_PATH, needs_font
 
 
 @needs_font

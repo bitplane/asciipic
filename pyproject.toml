@@ -13,6 +13,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+train = [
+    "torch",
+    "tensorboard",
+]
 dev = [
     "pre-commit",
     "pytest",
@@ -20,7 +24,7 @@ dev = [
     "pytest-cov",
     "build",
     "twine",
-    "ruff"
+    "ruff",
 ]
 
 [project.scripts]

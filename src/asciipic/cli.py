@@ -9,7 +9,22 @@ from asciipic.terminal import get_terminal_size
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 SAMPLER_DIR = DATA_DIR / "sampler"
+NEURAL_DIR = DATA_DIR / "neural"
 MODELS = {p.name: p for p in SAMPLER_DIR.iterdir() if p.is_file()}
+
+
+def _build_engine(args):
+    if args.engine == "neural":
+        from asciipic.neural import NeuralEngine
+
+        weights_path = NEURAL_DIR / "weights.npz"
+        if not weights_path.exists():
+            print(f"Neural weights not found: {weights_path}", file=sys.stderr)
+            print("Train first: python -m asciipic.generator.neural --data /path/to/images", file=sys.stderr)
+            sys.exit(1)
+        return NeuralEngine(weights_path)
+    model = FontModel.load(MODELS[args.model])
+    return SamplerEngine(model, exponent=args.exponent)
 
 
 def main():
@@ -17,6 +32,9 @@ def main():
     parser.add_argument("image", help="Path to input image")
     parser.add_argument(
         "-s", "--size", type=int, default=None, help="Output width in columns (default: terminal width)"
+    )
+    parser.add_argument(
+        "--engine", default="sampler", choices=["sampler", "neural"], help="Rendering engine (default: sampler)"
     )
     parser.add_argument(
         "-m", "--model", default="ascii", choices=sorted(MODELS), help="Character model to use (default: ascii)"
@@ -38,6 +56,5 @@ def main():
         print(f"File not found: {image_path}", file=sys.stderr)
         sys.exit(1)
 
-    model = FontModel.load(MODELS[args.model])
-    engine = SamplerEngine(model, exponent=args.exponent)
+    engine = _build_engine(args)
     print(image_to_ascii(image_path, engine, width=width, colour=args.colour))
