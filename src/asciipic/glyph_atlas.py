@@ -58,14 +58,15 @@ def build_atlas(
 
     # Cache fallback fonts so we only look them up once per font file
     fallback_cache: dict[str, tuple[ImageFont.FreeTypeFont, int]] = {}
+    # Cache fallback font path per unicode block (one fc-match per block, not per char)
+    block_fallback: dict[int, str | None] = {}
 
     char_list = list(characters)
     masks = np.zeros((len(char_list), cell_height, cell_width), dtype=np.float32)
 
-    # First, detect which chars the primary font renders identically (broken glyphs).
-    # Render two different chars that should look different — if identical, need fallback.
-    # We do this by checking a pair of chars that share a unicode block.
-    broken_blocks: set[str] = set()
+    # Detect which chars the primary font renders identically (broken glyphs).
+    # Compare pairs in the same unicode block — if identical, the block needs fallback.
+    broken_blocks: set[int] = set()
 
     for i, char in enumerate(char_list):
         img = Image.new("L", (cell_width, cell_height), 0)
@@ -73,16 +74,13 @@ def build_atlas(
         draw.text((0, primary_y_offset), char, fill=255, font=primary_font)
         arr = np.asarray(img, dtype=np.float32) / 255.0
 
-        # Check if this might be a broken fallback glyph by seeing if a
-        # very different character in the same block renders identically
         if char not in (" ", "\t") and arr.sum() > 0:
-            # Quick check: is this char in a block we already know is broken?
             block_start = ord(char) & 0xFFFFFF00
             if block_start in broken_blocks:
-                arr = _render_with_fallback(char, cell_width, cell_height, fallback_cache)
+                fallback_path = _block_fallback(block_start, block_fallback, char)
+                arr = _render_with_fallback(char, cell_width, cell_height, fallback_path, fallback_cache)
             else:
-                # Compare with a different char in the same block
-                other_code = ord(char) ^ 0x01  # flip lowest bit
+                other_code = ord(char) ^ 0x01
                 if chr(other_code) in characters and other_code != ord(char):
                     other_img = Image.new("L", (cell_width, cell_height), 0)
                     other_draw = ImageDraw.Draw(other_img)
@@ -90,21 +88,33 @@ def build_atlas(
                     other_arr = np.asarray(other_img, dtype=np.float32) / 255.0
                     if np.array_equal(arr, other_arr) and arr.sum() > 0:
                         broken_blocks.add(block_start)
-                        arr = _render_with_fallback(char, cell_width, cell_height, fallback_cache)
+                        fallback_path = _block_fallback(block_start, block_fallback, char)
+                        arr = _render_with_fallback(char, cell_width, cell_height, fallback_path, fallback_cache)
 
         masks[i] = arr
 
     return char_list, masks, cell_width, cell_height
 
 
+def _block_fallback(
+    block_start: int,
+    block_cache: dict[int, str | None],
+    representative_char: str,
+) -> str | None:
+    """Look up fallback font for a unicode block, cached."""
+    if block_start not in block_cache:
+        block_cache[block_start] = _find_fallback_font(representative_char)
+    return block_cache[block_start]
+
+
 def _render_with_fallback(
     char: str,
     cell_width: int,
     cell_height: int,
+    fallback_path: str | None,
     cache: dict[str, tuple[ImageFont.FreeTypeFont, int]],
 ) -> np.ndarray:
-    """Render a character using fontconfig fallback, centered in the cell."""
-    fallback_path = _find_fallback_font(char)
+    """Render a character using a fallback font, centered in the cell."""
     if fallback_path is None:
         return np.zeros((cell_height, cell_width), dtype=np.float32)
 
