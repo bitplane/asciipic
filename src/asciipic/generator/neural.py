@@ -175,13 +175,53 @@ class NeuralModel(nn.Module):
         return char_logits, invert_logits
 
 
-def _blur(x: torch.Tensor) -> torch.Tensor:
-    """3x3 Gaussian blur for (B, 1, H, W) tensors. Softens spatial comparison."""
-    coords = torch.arange(3, dtype=torch.float32, device=x.device) - 1
-    gauss = torch.exp(-coords**2 / 2)
-    gauss = gauss / gauss.sum()
-    kernel = (gauss[:, None] * gauss[None, :]).reshape(1, 1, 3, 3)
-    return F.conv2d(x, kernel, padding=1)
+def _haar_kernels(device: torch.device) -> torch.Tensor:
+    """Build the 4 Haar wavelet kernels: LL, LH, HL, HH. Shape: (4, 1, 2, 2)."""
+    return (
+        torch.tensor(
+            [
+                [[1, 1], [1, 1]],  # LL — average
+                [[1, 1], [-1, -1]],  # LH — horizontal edges
+                [[1, -1], [1, -1]],  # HL — vertical edges
+                [[1, -1], [-1, 1]],  # HH — diagonal edges
+            ],
+            dtype=torch.float32,
+            device=device,
+        ).reshape(4, 1, 2, 2)
+        * 0.5
+    )
+
+
+def _haar_decompose(x: torch.Tensor, kernels: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """One level of Haar wavelet decomposition.
+
+    Returns (ll, detail) where ll is the coarse approximation and
+    detail is the (LH, HL, HH) coefficients concatenated along channel dim.
+    """
+    # Pad to even dimensions if needed
+    _, _, h, w = x.shape
+    if h % 2 or w % 2:
+        x = F.pad(x, (0, w % 2, 0, h % 2))
+    coeffs = F.conv2d(x, kernels, stride=2)  # (B, 4, H/2, W/2)
+    return coeffs[:, :1], coeffs[:, 1:]
+
+
+def _haar_loss(a: torch.Tensor, b: torch.Tensor, levels: int = 3) -> torch.Tensor:
+    """MSE on Haar wavelet coefficients at multiple scales.
+
+    Compares horizontal, vertical, and diagonal edge structure at each level,
+    plus the coarse residual.
+    """
+    kernels = _haar_kernels(a.device)
+    loss = torch.zeros(1, device=a.device)
+    for _ in range(levels - 1):
+        a_ll, a_detail = _haar_decompose(a, kernels)
+        b_ll, b_detail = _haar_decompose(b, kernels)
+        loss = loss + F.mse_loss(a_detail, b_detail)
+        a, b = a_ll, b_ll
+    # Coarsest level
+    loss = loss + F.mse_loss(a, b)
+    return loss
 
 
 def render_grid(
@@ -305,7 +345,7 @@ def train(
             char_logits, invert_logits = model(batch)
             rendered = render_grid(char_logits, invert_logits, atlas)  # (B, 1, H, W)
 
-            loss = F.mse_loss(_blur(rendered), _blur(target))
+            loss = _haar_loss(rendered, target)
             opt.zero_grad()
             loss.backward()
             opt.step()
@@ -315,22 +355,19 @@ def train(
             global_step += 1
 
             if global_step % 100 == 0:
-                writer.add_scalar("loss/mse", loss.item(), global_step)
+                writer.add_scalar("loss/haar", loss.item(), global_step)
 
         sched.step()
         avg_loss = ep_loss / num_batches
         print(
-            f"epoch {epoch}/{epochs}  mse={avg_loss:.4f}"
-            f"  lr={sched.get_last_lr()[0]:.2e}  ({num_batches} batches)"
+            f"epoch {epoch}/{epochs}  loss={avg_loss:.4f}" f"  lr={sched.get_last_lr()[0]:.2e}  ({num_batches} batches)"
         )
-        writer.add_scalar("loss/epoch_mse", avg_loss, epoch)
+        writer.add_scalar("loss/epoch_haar", avg_loss, epoch)
 
         with torch.no_grad():
             vis_logits, vis_inv_logits = model(vis_samples)
             vis_rendered = render_grid(vis_logits, vis_inv_logits, atlas)
-            vis_target = _blur(vis_samples.unsqueeze(1))
-            vis_rendered = _blur(vis_rendered)
-            writer.add_image("vis/comparison", _vis_grid(vis_target, vis_rendered), epoch)
+            writer.add_image("vis/comparison", _vis_grid(vis_samples.unsqueeze(1), vis_rendered), epoch)
 
         _save_weights(model, char_list, cell_width, cell_height, font_path, font_size, output_path)
 
