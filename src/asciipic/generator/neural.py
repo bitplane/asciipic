@@ -228,6 +228,7 @@ def render_grid(
     char_logits: torch.Tensor,
     invert_logits: torch.Tensor,
     atlas: torch.Tensor,
+    temperature: float = 1.0,
 ) -> torch.Tensor:
     """Differentiable rendering of a 3x3 glyph grid.
 
@@ -239,6 +240,7 @@ def render_grid(
         char_logits: (batch, 9, num_chars)
         invert_logits: (batch, 9, 2) — class 0 = normal, class 1 = inverted
         atlas: (num_chars, cell_h, cell_w) binary masks
+        temperature: softmax temperature (lower = sharper, 1.0 = normal)
 
     Returns:
         rendered: (batch, 1, 3*cell_h, 3*cell_w)
@@ -248,12 +250,12 @@ def render_grid(
     flat_atlas = atlas.reshape(num_chars, -1)
 
     # Soft character selection
-    weights = F.softmax(char_logits.reshape(batch * 9, -1), dim=1)
+    weights = F.softmax(char_logits.reshape(batch * 9, -1) / temperature, dim=1)
     glyph = weights @ flat_atlas  # (batch*9, cell_h*cell_w)
     glyph = glyph.reshape(batch * 9, cell_h, cell_w)
 
     # Soft invert selection
-    inv_probs = F.softmax(invert_logits.reshape(batch * 9, 2), dim=1)
+    inv_probs = F.softmax(invert_logits.reshape(batch * 9, 2) / temperature, dim=1)
     inv = inv_probs[:, 1].reshape(batch * 9, 1, 1)  # P(inverted)
 
     # Render: mask XOR invert (soft version)
@@ -334,8 +336,12 @@ def train(
     print(f"Training on {device}, {num_chars} characters, cell {cell_width}x{cell_height}")
     print(f"Logging to: {writer.log_dir}")
 
+    temp_start, temp_end = 1.0, 0.1
     global_step = 0
     for epoch in range(1, epochs + 1):
+        # Linear anneal from temp_start to temp_end over training
+        temperature = temp_start + (temp_end - temp_start) * (epoch - 1) / max(epochs - 1, 1)
+
         ep_loss = 0.0
         num_batches = 0
         for (batch,) in loader:
@@ -343,7 +349,7 @@ def train(
 
             target = batch.unsqueeze(1)  # (B, 1, H, W)
             char_logits, invert_logits = model(batch)
-            rendered = render_grid(char_logits, invert_logits, atlas)  # (B, 1, H, W)
+            rendered = render_grid(char_logits, invert_logits, atlas, temperature)
 
             loss = _haar_loss(rendered, target)
             opt.zero_grad()
@@ -356,17 +362,19 @@ def train(
 
             if global_step % 100 == 0:
                 writer.add_scalar("loss/haar", loss.item(), global_step)
+                writer.add_scalar("temperature", temperature, global_step)
 
         sched.step()
         avg_loss = ep_loss / num_batches
         print(
-            f"epoch {epoch}/{epochs}  loss={avg_loss:.4f}" f"  lr={sched.get_last_lr()[0]:.2e}  ({num_batches} batches)"
+            f"epoch {epoch}/{epochs}  loss={avg_loss:.4f}"
+            f"  temp={temperature:.3f}  lr={sched.get_last_lr()[0]:.2e}  ({num_batches} batches)"
         )
         writer.add_scalar("loss/epoch_haar", avg_loss, epoch)
 
         with torch.no_grad():
             vis_logits, vis_inv_logits = model(vis_samples)
-            vis_rendered = render_grid(vis_logits, vis_inv_logits, atlas)
+            vis_rendered = render_grid(vis_logits, vis_inv_logits, atlas, temperature)
             writer.add_image("vis/comparison", _vis_grid(vis_samples.unsqueeze(1), vis_rendered), epoch)
 
         _save_weights(model, char_list, cell_width, cell_height, font_path, font_size, output_path)
