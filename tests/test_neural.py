@@ -4,15 +4,15 @@ from PIL import Image
 from asciipic.neural import NeuralEngine
 from tests.conftest import FONT_PATH, needs_font
 
+CONTEXT = 3
+
 
 def _make_random_weights(tmp_path, font_path, font_size=16, characters=" #@"):
-    """Create a weights file with random MLP parameters."""
+    """Create a weights file with random CNN+MLP parameters."""
     from asciipic.glyph_atlas import build_atlas
 
     char_list, masks, cw, ch = build_atlas(font_path, font_size, characters)
     num_chars = len(char_list)
-    downsample_h, downsample_w = 15, 18
-    flat_size = downsample_h * downsample_w * 3
     hidden = 256
 
     rng = np.random.default_rng(42)
@@ -24,17 +24,17 @@ def _make_random_weights(tmp_path, font_path, font_size=16, characters=" #@"):
         cell_height=np.array(ch),
         font_path=np.array(font_path),
         font_size=np.array(font_size),
-        downsample_h=np.array(downsample_h),
-        downsample_w=np.array(downsample_w),
         **{
-            "weights.shared.weight": rng.standard_normal((hidden, flat_size)).astype(np.float32) * 0.01,
+            "weights.conv.0.weight": rng.standard_normal((64, 1, 3, 3)).astype(np.float32) * 0.01,
+            "weights.conv.0.bias": np.zeros(64, dtype=np.float32),
+            "weights.conv.2.weight": rng.standard_normal((256, 64, 3, 3)).astype(np.float32) * 0.01,
+            "weights.conv.2.bias": np.zeros(256, dtype=np.float32),
+            "weights.shared.weight": rng.standard_normal((hidden, 256)).astype(np.float32) * 0.01,
             "weights.shared.bias": np.zeros(hidden, dtype=np.float32),
             "weights.char_head.weight": rng.standard_normal((num_chars, hidden)).astype(np.float32) * 0.01,
             "weights.char_head.bias": np.zeros(num_chars, dtype=np.float32),
-            "weights.fg_head.weight": rng.standard_normal((3, hidden)).astype(np.float32) * 0.01,
-            "weights.fg_head.bias": np.zeros(3, dtype=np.float32),
-            "weights.bg_head.weight": rng.standard_normal((3, hidden)).astype(np.float32) * 0.01,
-            "weights.bg_head.bias": np.zeros(3, dtype=np.float32),
+            "weights.invert_head.weight": rng.standard_normal((2, hidden)).astype(np.float32) * 0.01,
+            "weights.invert_head.bias": np.zeros(2, dtype=np.float32),
         },
     )
     return weights_path

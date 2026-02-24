@@ -21,9 +21,9 @@ def _fit_fallback_font(fallback_path: str, cell_height: int) -> tuple[ImageFont.
     """Find the largest font size for a fallback font that fits within cell_height."""
     for size in range(cell_height, 4, -1):
         font = ImageFont.truetype(fallback_path, size)
-        bbox = font.getbbox("M")
-        if bbox[3] - bbox[1] <= cell_height:
-            return font, -bbox[1]
+        ascent, descent = font.getmetrics()
+        if ascent + descent <= cell_height:
+            return font, 0
     return ImageFont.truetype(fallback_path, 6), 0
 
 
@@ -52,9 +52,10 @@ def build_atlas(
     """
     primary_font = ImageFont.truetype(font_path, font_size)
     bbox = primary_font.getbbox("M")
+    ascent, descent = primary_font.getmetrics()
     cell_width = bbox[2] - bbox[0]
-    cell_height = bbox[3] - bbox[1]
-    primary_y_offset = -bbox[1]
+    cell_height = ascent + descent
+    primary_y_offset = 0
 
     # Cache fallback fonts so we only look them up once per font file
     fallback_cache: dict[str, tuple[ImageFont.FreeTypeFont, int]] = {}
@@ -93,7 +94,24 @@ def build_atlas(
 
         masks[i] = arr
 
-    return char_list, masks, cell_width, cell_height
+    # Threshold to binary — removes antialiasing that confuses training
+    masks = (masks > 0.5).astype(np.float32)
+
+    # Remove duplicate glyphs (keep first occurrence) and blank non-space chars
+    seen: dict[bytes, int] = {}
+    keep = []
+    for i, char in enumerate(char_list):
+        key = masks[i].tobytes()
+        if char == " ":
+            keep.append(i)
+            seen[key] = i
+        elif key in seen or masks[i].sum() == 0:
+            continue
+        else:
+            seen[key] = i
+            keep.append(i)
+
+    return [char_list[i] for i in keep], masks[keep], cell_width, cell_height
 
 
 def _block_fallback(

@@ -1,13 +1,16 @@
 """Training script for the neural ASCII rendering engine.
 
-Trains an MLP to map 3x3 cell patches to character + fg/bg colour predictions
-for the center cell, using a differentiable renderer and pixel-level MSE loss.
+Trains a CNN+MLP to map 3x3 cell patches to character + invert predictions.
+Both real and rendered images are binarized to black and white. The rendered
+grid is seamless — tile boundaries are invisible except at invert transitions.
+Training uses direct MSE between the soft-rendered grid and the real binary patch.
 
 Usage:
     python -m asciipic.generator.neural --data /path/to/images --output data/neural/weights.npz
 """
 
 import argparse
+import hashlib
 import subprocess
 import warnings
 from pathlib import Path
@@ -24,22 +27,24 @@ from asciipic.charsets import VISUAL
 from asciipic.glyph_atlas import build_atlas
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff"}
-PATCHES_PER_IMAGE = 100
 TARGET_COLS = 120
 CONTEXT = 3  # 3x3 cells per patch
 
 
-def _cache_path(data_dir: str | Path) -> Path:
-    """Build cache path from the data directory, encoding slashes as dashes."""
+def _cache_path(data_dir: str | Path, cell_width: int, cell_height: int, max_patches: int) -> Path:
+    """Build cache path from the data directory, cell dimensions, and patch count."""
     resolved = Path(data_dir).resolve()
     encoded = str(resolved).replace("/", "-").lstrip("-")
-    return Path.home() / ".cache" / "asciipic" / f"{encoded}.npy"
+    return Path.home() / ".cache" / "asciipic" / f"{encoded}_{cell_width}x{cell_height}_{max_patches}_bin.npy"
 
 
 def _build_dataset(data_dir: str | Path, cell_width: int, cell_height: int, max_patches: int) -> np.ndarray:
     """Extract random 3x3-cell patches from all images in a directory.
 
-    Returns array of shape (N, 3*cell_h, 3*cell_w, 3) float32 in [0, 1].
+    Each patch is converted to grayscale and binarized using the mean brightness
+    of its center cell as threshold. Duplicate binary patches are discarded.
+
+    Returns array of shape (N, 3*cell_h, 3*cell_w) uint8, values 0 or 1.
     """
     data_dir = Path(data_dir)
     paths = sorted(p for p in data_dir.rglob("*") if p.suffix.lower() in IMAGE_EXTENSIONS)
@@ -50,14 +55,20 @@ def _build_dataset(data_dir: str | Path, cell_width: int, cell_height: int, max_
     patch_w = CONTEXT * cell_width
     patch_h = CONTEXT * cell_height
     rng = np.random.default_rng(42)
-    patches = []
 
-    print(f"Building dataset from {len(paths)} images (max {max_patches} patches)...")
+    # Distribute patches evenly: ceil(max_patches / num_images) per image
+    per_image = max(1, -(-max_patches // len(paths)))
+
+    result = np.empty((max_patches, patch_h, patch_w), dtype=np.uint8)
+    seen: set[bytes] = set()
+    count = 0
+
+    print(f"Building dataset from {len(paths)} images ({per_image} patches each, max {max_patches})...")
     for i, path in enumerate(paths):
-        if len(patches) >= max_patches:
+        if count >= max_patches:
             break
         if (i + 1) % 100 == 0:
-            print(f"  {i + 1}/{len(paths)} images, {len(patches)} patches so far")
+            print(f"  {i + 1}/{len(paths)} images, {count} patches so far")
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", UserWarning)
@@ -76,22 +87,41 @@ def _build_dataset(data_dir: str | Path, cell_width: int, cell_height: int, max_
         img = img.resize((target_pixel_width, new_h), Image.LANCZOS)
         arr = np.asarray(img, dtype=np.float32) / 255.0
 
-        remaining = max_patches - len(patches)
-        n_crops = min(PATCHES_PER_IMAGE, remaining)
         max_y = arr.shape[0] - patch_h
         max_x = arr.shape[1] - patch_w
-        for _ in range(n_crops):
+        n = min(per_image, max_patches - count)
+        for _ in range(n):
             y = rng.integers(max_y + 1)
             x = rng.integers(max_x + 1)
-            patches.append(arr[y : y + patch_h, x : x + patch_w].copy())
+            patch_rgb = arr[y : y + patch_h, x : x + patch_w]
 
-    print(f"  Done: {len(patches)} patches from {i + 1} images")
-    return np.stack(patches)
+            # Grayscale → center cell threshold → binary
+            gray = patch_rgb.mean(axis=-1)
+            center = gray[cell_height : 2 * cell_height, cell_width : 2 * cell_width]
+            threshold = center.mean()
+            binary = (gray > threshold).astype(np.uint8)
+
+            # Deduplicate by center cell content
+            center_bin = binary[cell_height : 2 * cell_height, cell_width : 2 * cell_width]
+            digest = hashlib.md5(center_bin.tobytes()).digest()
+            if digest in seen:
+                continue
+            seen.add(digest)
+
+            result[count] = binary
+            count += 1
+            if count >= max_patches:
+                break
+
+    result = result[:count]
+    rng.shuffle(result)
+    print(f"  Done: {count} unique patches from {i + 1} images")
+    return result
 
 
 def load_or_build_dataset(data_dir: str | Path, cell_width: int, cell_height: int, max_patches: int) -> np.ndarray:
     """Load cached dataset or build and cache it."""
-    cache = _cache_path(data_dir)
+    cache = _cache_path(data_dir, cell_width, cell_height, max_patches)
     if cache.exists():
         print(f"Loading cached dataset: {cache}")
         return np.load(cache)
@@ -104,51 +134,127 @@ def load_or_build_dataset(data_dir: str | Path, cell_width: int, cell_height: in
 
 
 class NeuralModel(nn.Module):
-    """MLP that maps a downsampled 3x3 cell patch to center cell predictions."""
+    """CNN + MLP that maps a 3x3 cell patch to per-position predictions.
 
-    DOWNSAMPLE_H = 15
-    DOWNSAMPLE_W = 18
+    The conv frontend pools to (batch, 256, 3, 3) — one 256-dim feature vector
+    per cell position. The shared layer and heads process each position
+    independently with shared weights, predicting all 9 cells.
+    """
 
-    def __init__(self, num_chars: int, hidden: int = 256):
+    def __init__(self, num_chars: int, cell_height: int, cell_width: int, hidden: int = 256):
         super().__init__()
-        flat_size = self.DOWNSAMPLE_H * self.DOWNSAMPLE_W * 3
-        self.shared = nn.Linear(flat_size, hidden)
+        self.conv = nn.Sequential(
+            nn.Conv2d(1, 64, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(64, 256, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(),
+            nn.AdaptiveAvgPool2d((3, 3)),
+        )
+        self.shared = nn.Linear(256, hidden)
         self.char_head = nn.Linear(hidden, num_chars)
-        self.fg_head = nn.Linear(hidden, 3)
-        self.bg_head = nn.Linear(hidden, 3)
+        self.invert_head = nn.Linear(hidden, 2)
 
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        # x: (batch, 3*cell_h, 3*cell_w, 3)
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Forward pass predicting all 9 cell positions.
+
+        Args:
+            x: (batch, 3*cell_h, 3*cell_w) binary float tensor
+
+        Returns:
+            char_logits: (batch, 9, num_chars)
+            invert_logits: (batch, 9, 2) — class 0 = normal, class 1 = inverted
+        """
         batch = x.shape[0]
-        x = x.permute(0, 3, 1, 2)
-        x = F.interpolate(x, size=(self.DOWNSAMPLE_H, self.DOWNSAMPLE_W), mode="bilinear", align_corners=False)
-        x = x.reshape(batch, -1)
-        h = F.relu(self.shared(x))
-        char_logits = self.char_head(h)
-        fg = torch.sigmoid(self.fg_head(h))
-        bg = torch.sigmoid(self.bg_head(h))
-        return char_logits, fg, bg
+        x = x.unsqueeze(1)  # (batch, 1, H, W)
+        x = self.conv(x)  # (batch, 256, 3, 3)
+        # Reshape to per-position vectors: (batch*9, 256)
+        x = x.permute(0, 2, 3, 1).reshape(batch * 9, 256)
+        h = F.relu(self.shared(x))  # (batch*9, hidden)
+        char_logits = self.char_head(h).reshape(batch, 9, -1)
+        invert_logits = self.invert_head(h).reshape(batch, 9, 2)
+        return char_logits, invert_logits
 
 
-def soft_render(
+def _blur(x: torch.Tensor) -> torch.Tensor:
+    """3x3 Gaussian blur for (B, 1, H, W) tensors. Softens spatial comparison."""
+    coords = torch.arange(3, dtype=torch.float32, device=x.device) - 1
+    gauss = torch.exp(-coords**2 / 2)
+    gauss = gauss / gauss.sum()
+    kernel = (gauss[:, None] * gauss[None, :]).reshape(1, 1, 3, 3)
+    return F.conv2d(x, kernel, padding=1)
+
+
+def render_grid(
     char_logits: torch.Tensor,
-    fg: torch.Tensor,
-    bg: torch.Tensor,
+    invert_logits: torch.Tensor,
     atlas: torch.Tensor,
 ) -> torch.Tensor:
-    """Differentiable rendering of the center cell using soft glyph selection.
+    """Differentiable rendering of a 3x3 glyph grid.
+
+    Uses softmax for smooth gradient flow during training. Each cell blends
+    glyphs weighted by character probabilities, with soft invert. Inference
+    uses argmax for hard selection.
+
+    Args:
+        char_logits: (batch, 9, num_chars)
+        invert_logits: (batch, 9, 2) — class 0 = normal, class 1 = inverted
+        atlas: (num_chars, cell_h, cell_w) binary masks
 
     Returns:
-        rendered: (batch, cell_h, cell_w, 3)
+        rendered: (batch, 1, 3*cell_h, 3*cell_w)
     """
-    weights = F.softmax(char_logits, dim=1)  # (batch, num_chars)
+    batch = char_logits.shape[0]
     num_chars, cell_h, cell_w = atlas.shape
-    flat_atlas = atlas.reshape(num_chars, -1)  # (num_chars, cell_h * cell_w)
-    soft_glyph = weights @ flat_atlas  # (batch, cell_h * cell_w)
-    soft_glyph = soft_glyph.reshape(-1, cell_h, cell_w, 1)  # (batch, cell_h, cell_w, 1)
-    fg = fg.reshape(-1, 1, 1, 3)
-    bg = bg.reshape(-1, 1, 1, 3)
-    return soft_glyph * fg + (1 - soft_glyph) * bg
+    flat_atlas = atlas.reshape(num_chars, -1)
+
+    # Soft character selection
+    weights = F.softmax(char_logits.reshape(batch * 9, -1), dim=1)
+    glyph = weights @ flat_atlas  # (batch*9, cell_h*cell_w)
+    glyph = glyph.reshape(batch * 9, cell_h, cell_w)
+
+    # Soft invert selection
+    inv_probs = F.softmax(invert_logits.reshape(batch * 9, 2), dim=1)
+    inv = inv_probs[:, 1].reshape(batch * 9, 1, 1)  # P(inverted)
+
+    # Render: mask XOR invert (soft version)
+    cells = glyph * (1 - inv) + (1 - glyph) * inv
+
+    # Arrange into 3x3 grid
+    cells = cells.reshape(batch, 3, 3, cell_h, cell_w)
+    grid = cells.permute(0, 1, 3, 2, 4).reshape(batch, 3 * cell_h, 3 * cell_w)
+    return grid.unsqueeze(1)  # (batch, 1, H, W)
+
+
+def _vis_grid(target: torch.Tensor, rendered: torch.Tensor) -> torch.Tensor:
+    """Compose a 6x4 grid of target/rendered pairs.
+
+    Layout: columns alternate target, rendered (3 pairs per row, 4 rows = 12 pairs).
+
+    Args:
+        target: (N, 1, H, W) binary patches
+        rendered: (N, 1, H, W) soft-rendered patches
+
+    Returns:
+        (3, grid_H, grid_W) RGB tensor suitable for writer.add_image
+    """
+    ncols, nrows = 6, 4
+    n_pairs = min(target.shape[0], (ncols // 2) * nrows)
+    _, _, H, W = target.shape
+    gap = 1
+
+    grid_h = nrows * H + (nrows + 1) * gap
+    grid_w = ncols * W + (ncols + 1) * gap
+    grid = torch.full((3, grid_h, grid_w), 0.25, device=target.device)
+
+    for idx in range(n_pairs):
+        row, pair_col = divmod(idx, ncols // 2)
+        for side, images in enumerate([target, rendered]):
+            col = pair_col * 2 + side
+            y0 = row * (H + gap) + gap
+            x0 = col * (W + gap) + gap
+            grid[:, y0 : y0 + H, x0 : x0 + W] = images[idx].expand(3, H, W)
+
+    return grid
 
 
 def train(
@@ -173,45 +279,59 @@ def train(
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     atlas = torch.from_numpy(masks_np).to(device)
-    model = NeuralModel(num_chars).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    model = NeuralModel(num_chars, cell_height, cell_width).to(device)
+    opt = torch.optim.Adam(model.parameters(), lr=lr)
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
 
     dataset = TensorDataset(torch.from_numpy(patches))
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=2, pin_memory=True)
 
     writer = SummaryWriter(log_dir=log_dir) if log_dir else SummaryWriter()
 
+    # Fixed visual samples for tensorboard (same patches every epoch)
+    vis_samples = torch.from_numpy(patches[:12]).to(device, dtype=torch.float32)
+
     print(f"Training on {device}, {num_chars} characters, cell {cell_width}x{cell_height}")
     print(f"Logging to: {writer.log_dir}")
 
     global_step = 0
     for epoch in range(1, epochs + 1):
-        epoch_loss = 0.0
+        ep_loss = 0.0
         num_batches = 0
         for (batch,) in loader:
-            batch = batch.to(device)
+            batch = batch.to(device, dtype=torch.float32)  # uint8 → float32
 
-            # Extract center cell pixels as target
-            center = batch[:, cell_height : 2 * cell_height, cell_width : 2 * cell_width, :]
+            target = batch.unsqueeze(1)  # (B, 1, H, W)
+            char_logits, invert_logits = model(batch)
+            rendered = render_grid(char_logits, invert_logits, atlas)  # (B, 1, H, W)
 
-            char_logits, fg, bg = model(batch)
-            rendered = soft_render(char_logits, fg, bg, atlas)
-            loss = F.mse_loss(rendered, center)
-
-            optimizer.zero_grad()
+            loss = F.mse_loss(_blur(rendered), _blur(target))
+            opt.zero_grad()
             loss.backward()
-            optimizer.step()
+            opt.step()
 
-            epoch_loss += loss.item()
+            ep_loss += loss.item()
             num_batches += 1
             global_step += 1
 
             if global_step % 100 == 0:
                 writer.add_scalar("loss/mse", loss.item(), global_step)
 
-        avg_loss = epoch_loss / num_batches
-        print(f"epoch {epoch}/{epochs}  avg_loss={avg_loss:.6f}  ({num_batches} batches)")
-        writer.add_scalar("loss/epoch_avg", avg_loss, epoch)
+        sched.step()
+        avg_loss = ep_loss / num_batches
+        print(
+            f"epoch {epoch}/{epochs}  mse={avg_loss:.4f}"
+            f"  lr={sched.get_last_lr()[0]:.2e}  ({num_batches} batches)"
+        )
+        writer.add_scalar("loss/epoch_mse", avg_loss, epoch)
+
+        with torch.no_grad():
+            vis_logits, vis_inv_logits = model(vis_samples)
+            vis_rendered = render_grid(vis_logits, vis_inv_logits, atlas)
+            vis_target = _blur(vis_samples.unsqueeze(1))
+            vis_rendered = _blur(vis_rendered)
+            writer.add_image("vis/comparison", _vis_grid(vis_target, vis_rendered), epoch)
+
         _save_weights(model, char_list, cell_width, cell_height, font_path, font_size, output_path)
 
     writer.close()
@@ -229,12 +349,12 @@ def _save_weights(model, char_list, cell_width, cell_height, font_path, font_siz
         "cell_height": np.array(cell_height),
         "font_path": np.array(font_path),
         "font_size": np.array(font_size),
-        "downsample_h": np.array(NeuralModel.DOWNSAMPLE_H),
-        "downsample_w": np.array(NeuralModel.DOWNSAMPLE_W),
     }
     for key, tensor in state.items():
         save_dict[f"weights.{key}"] = tensor.cpu().numpy()
-    np.savez(output_path, **save_dict)
+    tmp_path = output_path.with_suffix(".tmp.npz")
+    np.savez(tmp_path, **save_dict)
+    tmp_path.rename(output_path)
 
 
 def main():
