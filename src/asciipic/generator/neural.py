@@ -323,7 +323,6 @@ def train(
     atlas = torch.from_numpy(masks_np).to(device)
     model = NeuralModel(num_chars, cell_height, cell_width).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
-    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
 
     dataset = TensorDataset(torch.from_numpy(patches))
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=2, pin_memory=True)
@@ -336,11 +335,12 @@ def train(
     print(f"Training on {device}, {num_chars} characters, cell {cell_width}x{cell_height}")
     print(f"Logging to: {writer.log_dir}")
 
-    temp_start, temp_end = 1.0, 0.1
+    temp_start, temp_end, temp_epochs = 1.0, 0.1, 200
     global_step = 0
     for epoch in range(1, epochs + 1):
-        # Linear anneal from temp_start to temp_end over training
-        temperature = temp_start + (temp_end - temp_start) * (epoch - 1) / max(epochs - 1, 1)
+        # Linear anneal from temp_start to temp_end over first temp_epochs, then hold
+        t = min((epoch - 1) / max(temp_epochs - 1, 1), 1.0)
+        temperature = temp_start + (temp_end - temp_start) * t
 
         ep_loss = 0.0
         num_batches = 0
@@ -364,11 +364,10 @@ def train(
                 writer.add_scalar("loss/haar", loss.item(), global_step)
                 writer.add_scalar("temperature", temperature, global_step)
 
-        sched.step()
         avg_loss = ep_loss / num_batches
         print(
             f"epoch {epoch}/{epochs}  loss={avg_loss:.4f}"
-            f"  temp={temperature:.3f}  lr={sched.get_last_lr()[0]:.2e}  ({num_batches} batches)"
+            f"  temp={temperature:.3f}  lr={lr:.2e}  ({num_batches} batches)"
         )
         writer.add_scalar("loss/epoch_haar", avg_loss, epoch)
 
