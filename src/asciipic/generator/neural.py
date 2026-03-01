@@ -335,13 +335,8 @@ def train(
     print(f"Training on {device}, {num_chars} characters, cell {cell_width}x{cell_height}")
     print(f"Logging to: {writer.log_dir}")
 
-    temp_start, temp_end, temp_epochs = 1.0, 0.1, 200
     global_step = 0
     for epoch in range(1, epochs + 1):
-        # Linear anneal from temp_start to temp_end over first temp_epochs, then hold
-        t = min((epoch - 1) / max(temp_epochs - 1, 1), 1.0)
-        temperature = temp_start + (temp_end - temp_start) * t
-
         ep_loss = 0.0
         num_batches = 0
         for (batch,) in loader:
@@ -349,7 +344,7 @@ def train(
 
             target = batch.unsqueeze(1)  # (B, 1, H, W)
             char_logits, invert_logits = model(batch)
-            rendered = render_grid(char_logits, invert_logits, atlas, temperature)
+            rendered = render_grid(char_logits, invert_logits, atlas)
 
             loss = _haar_loss(rendered, target)
             opt.zero_grad()
@@ -362,18 +357,14 @@ def train(
 
             if global_step % 100 == 0:
                 writer.add_scalar("loss/haar", loss.item(), global_step)
-                writer.add_scalar("temperature", temperature, global_step)
 
         avg_loss = ep_loss / num_batches
-        print(
-            f"epoch {epoch}/{epochs}  loss={avg_loss:.4f}"
-            f"  temp={temperature:.3f}  lr={lr:.2e}  ({num_batches} batches)"
-        )
+        print(f"epoch {epoch}/{epochs}  loss={avg_loss:.4f}" f"  lr={lr:.2e}  ({num_batches} batches)")
         writer.add_scalar("loss/epoch_haar", avg_loss, epoch)
 
         with torch.no_grad():
             vis_logits, vis_inv_logits = model(vis_samples)
-            vis_rendered = render_grid(vis_logits, vis_inv_logits, atlas, temperature)
+            vis_rendered = render_grid(vis_logits, vis_inv_logits, atlas)
             writer.add_image("vis/comparison", _vis_grid(vis_samples.unsqueeze(1), vis_rendered), epoch)
 
         _save_weights(model, char_list, cell_width, cell_height, font_path, font_size, output_path)
